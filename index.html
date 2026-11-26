@@ -1,0 +1,364 @@
+<!doctype html>
+<html lang="bn">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover">
+<meta name="theme-color" content="#000000">
+<title>Poster Overlay</title>
+<style>
+  /* রং আর মাপ এক জায়গায় রাখা হলো */
+  :root {
+    --bg: #000;
+    --panel: rgba(20, 20, 20, 0.78);
+    --text: #fff;
+    --muted: #bbb;
+    --accent: #ffb020;
+    --radius: 14px;
+  }
+  * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
+  [hidden] { display: none !important; } /* hidden দিলে সবসময় লুকাবে */
+  html, body {
+    margin: 0; height: 100%; overflow: hidden;
+    background: var(--bg); color: var(--text);
+    font-family: system-ui, "Noto Sans Bengali", sans-serif;
+    touch-action: none; /* ব্রাউজারের নিজের zoom/scroll বন্ধ, আমরা নিজেরা gesture ধরব */
+  }
+
+  /* ক্যামেরার ভিডিও পুরো স্ক্রিন জুড়ে */
+  #cam {
+    position: fixed; inset: 0; width: 100%; height: 100%;
+    object-fit: cover; background: #111;
+  }
+
+  /* ডিজাইনের ছবি রাখার জায়গা (এটাকেই সরানো/বড়-ছোট করা হয়) */
+  #stage { position: fixed; inset: 0; overflow: hidden; }
+  #design {
+    position: absolute; left: 50%; top: 50%;
+    transform-origin: center center;
+    max-width: none; pointer-events: none; user-select: none;
+    opacity: 0.5;
+  }
+  #design.diff { mix-blend-mode: difference; }
+
+  /* উপরের বার */
+  .bar {
+    position: fixed; left: 0; right: 0; display: flex; gap: 8px;
+    align-items: center; padding: 10px 12px; z-index: 5;
+  }
+  #top { top: 0; padding-top: max(10px, env(safe-area-inset-top)); flex-wrap: wrap; }
+  #bottom {
+    bottom: 0; flex-direction: column; align-items: stretch;
+    padding-bottom: max(12px, env(safe-area-inset-bottom));
+    background: linear-gradient(transparent, rgba(0,0,0,.75) 35%);
+  }
+  .hide-ui .bar { display: none; }
+
+  button, .btn {
+    background: var(--panel); color: var(--text); border: 1px solid rgba(255,255,255,.15);
+    border-radius: var(--radius); padding: 9px 12px; font-size: 14px; font-family: inherit;
+    cursor: pointer; white-space: nowrap;
+  }
+  button.on { background: var(--accent); color: #000; border-color: var(--accent); }
+  .row { display: flex; gap: 10px; align-items: center; }
+  .row label { font-size: 13px; color: var(--muted); min-width: 64px; }
+  input[type=range] { flex: 1; accent-color: var(--accent); height: 28px; }
+
+  /* ডিজাইনের ছোট ছবিগুলোর সারি */
+  #thumbs { display: flex; gap: 8px; overflow-x: auto; padding: 4px 0; touch-action: pan-x; }
+  #thumbs img {
+    height: 52px; border-radius: 8px; border: 2px solid transparent; flex: none;
+  }
+  #thumbs img.active { border-color: var(--accent); }
+
+  /* মাঝখানে মেসেজ (যেমন: ক্যামেরা চালু হয়নি) */
+  #msg {
+    position: fixed; left: 16px; right: 16px; top: 50%; transform: translateY(-50%);
+    text-align: center; z-index: 4; font-size: 16px; line-height: 1.6;
+    background: var(--panel); border-radius: var(--radius); padding: 18px;
+  }
+  #msg[hidden] { display: none; }
+
+  /* UI লুকানো থাকলে আবার দেখানোর ছোট বাটন */
+  #showUi {
+    position: fixed; right: 12px; bottom: max(12px, env(safe-area-inset-bottom));
+    z-index: 6; display: none;
+  }
+  .hide-ui #showUi { display: block; }
+  #lockBadge {
+    position: fixed; left: 12px; bottom: max(12px, env(safe-area-inset-bottom));
+    z-index: 6; display: none; font-size: 13px;
+  }
+  .hide-ui.locked #lockBadge { display: block; }
+</style>
+</head>
+<body>
+  <video id="cam" autoplay playsinline muted></video>
+  <div id="stage"><img id="design" alt=""></div>
+
+  <div id="msg">
+    <b>Poster Overlay</b><br>
+    নিচে <b>＋ ডিজাইন</b> চাপ দিয়ে তোমার ডিজাইনের ছবি দাও।<br>
+    তারপর যেখান থেকে ছবি তোলা হয়েছিল সেখানে দাঁড়িয়ে দেওয়াল মিলিয়ে নাও।
+  </div>
+
+  <div id="top" class="bar">
+    <button id="lockBtn">🔓 সরানো যাবে</button>
+    <button id="diffBtn" title="রং উল্টে দেখায়, মেলানো সহজ হয়">মিলাও মোড</button>
+    <button id="resetBtn">↺ রিসেট</button>
+    <button id="hideBtn">👁 লুকাও</button>
+  </div>
+
+  <div id="bottom" class="bar">
+    <div class="row">
+      <label for="opacity">স্বচ্ছতা</label>
+      <input id="opacity" type="range" min="0" max="100" value="50">
+    </div>
+    <div class="row" id="zoomRow" hidden>
+      <label for="zoom">ক্যামেরা zoom</label>
+      <input id="zoom" type="range" min="1" max="1" step="0.1" value="1">
+    </div>
+    <div class="row">
+      <label class="btn" for="file" style="min-width:auto">＋ ডিজাইন</label>
+      <input id="file" type="file" accept="image/*" multiple hidden>
+      <div id="thumbs"></div>
+      <button id="delBtn" title="এই ডিজাইনটা মুছে ফেলো">🗑</button>
+    </div>
+  </div>
+
+  <button id="showUi">⚙</button>
+  <div id="lockBadge" class="btn">🔒 লক</div>
+
+<script>
+// ---------- ছোট হেল্পার ----------
+const $ = (id) => document.getElementById(id);
+const cam = $('cam'), design = $('design'), msg = $('msg');
+
+// ডিজাইনের অবস্থান: x,y = মাঝখান থেকে কত সরানো; s = কত বড়; r = কত ডিগ্রি ঘোরানো
+let view = { x: 0, y: 0, s: 1, r: 0 };
+let locked = false;
+let designs = [];      // [{id, url, view}]
+let current = null;    // এখন যে ডিজাইন দেখাচ্ছে
+
+// ---------- ১. ক্যামেরা চালু করা ----------
+async function startCamera() {
+  if (!navigator.mediaDevices?.getUserMedia) {
+    showMsg('এই ব্রাউজারে ক্যামেরা চলে না। Chrome দিয়ে খোলো (https লিংকে)।');
+    return;
+  }
+  try {
+    // পেছনের ক্যামেরা চাই, যত বড় রেজোলিউশন পাওয়া যায়
+    const stream = await navigator.mediaDevices.getUserMedia({
+      audio: false,
+      video: { facingMode: { ideal: 'environment' }, width: { ideal: 1920 }, height: { ideal: 1080 } }
+    });
+    cam.srcObject = stream;
+    setupZoom(stream.getVideoTracks()[0]);
+  } catch (e) {
+    showMsg('ক্যামেরা চালু হয়নি 😕<br>ব্রাউজারকে ক্যামেরার অনুমতি দাও, তারপর পেজ রিলোড করো।<br><small>(' + e.name + ')</small>');
+  }
+}
+
+// ফোনের ক্যামেরা যদি zoom সাপোর্ট করে, তাহলে slider দেখাও
+function setupZoom(track) {
+  const caps = track?.getCapabilities?.();
+  if (!caps?.zoom) return;
+  const z = $('zoom');
+  z.min = caps.zoom.min; z.max = caps.zoom.max; z.step = caps.zoom.step || 0.1;
+  z.value = track.getSettings().zoom || caps.zoom.min;
+  $('zoomRow').hidden = false;
+  z.oninput = () => track.applyConstraints({ advanced: [{ zoom: Number(z.value) }] }).catch(() => {});
+}
+
+function showMsg(html) { msg.innerHTML = html; msg.hidden = false; }
+
+// স্ক্রিন যেন বন্ধ না হয়ে যায় (পোস্টার লাগানোর সময় কাজে লাগে)
+let wakeLock = null;
+async function keepAwake() {
+  try { wakeLock = await navigator.wakeLock?.request('screen'); } catch {}
+}
+document.addEventListener('visibilitychange', () => {
+  if (document.visibilityState === 'visible') keepAwake();
+});
+
+// ---------- ২. ডিজাইন সাজানো (সরানো, বড়-ছোট, ঘোরানো) ----------
+function applyView() {
+  design.style.transform =
+    `translate(-50%,-50%) translate(${view.x}px,${view.y}px) rotate(${view.r}deg) scale(${view.s})`;
+  if (current) { current.view = { ...view }; saveViews(); }
+}
+
+// শুরুতে ছবিটা স্ক্রিনের চওড়ায় বসাও
+function fitView() {
+  const w = design.naturalWidth || 1, h = design.naturalHeight || 1;
+  // ক্যামেরা ভিডিও "cover" এ দেখায়, তাই ছবিও স্ক্রিন ঢেকে দেয় এমনভাবে বসাই
+  const s = Math.max(innerWidth / w, innerHeight / h);
+  view = { x: 0, y: 0, s, r: 0 };
+  applyView();
+}
+
+// আঙুলের gesture: এক আঙুলে সরাও, দুই আঙুলে বড়-ছোট আর ঘোরাও
+const pointers = new Map();
+let start = null;
+
+function gestureInfo() {
+  const p = [...pointers.values()];
+  if (p.length === 1) return { cx: p[0].x, cy: p[0].y, dist: 1, ang: 0 };
+  const [a, b] = p;
+  return {
+    cx: (a.x + b.x) / 2, cy: (a.y + b.y) / 2,
+    dist: Math.hypot(b.x - a.x, b.y - a.y),
+    ang: Math.atan2(b.y - a.y, b.x - a.x) * 180 / Math.PI
+  };
+}
+
+const stage = $('stage');
+stage.addEventListener('pointerdown', (e) => {
+  if (locked || !current) return;
+  stage.setPointerCapture(e.pointerId);
+  pointers.set(e.pointerId, { x: e.clientX, y: e.clientY });
+  start = { g: gestureInfo(), v: { ...view } };
+});
+stage.addEventListener('pointermove', (e) => {
+  if (!pointers.has(e.pointerId)) return;
+  pointers.set(e.pointerId, { x: e.clientX, y: e.clientY });
+  const g = gestureInfo();
+  view.x = start.v.x + (g.cx - start.g.cx);
+  view.y = start.v.y + (g.cy - start.g.cy);
+  if (pointers.size >= 2) {
+    view.s = start.v.s * (g.dist / start.g.dist);
+    view.r = start.v.r + (g.ang - start.g.ang);
+  }
+  applyView();
+});
+function endPointer(e) {
+  pointers.delete(e.pointerId);
+  // একটা আঙুল তুললে বাকিগুলো থেকে নতুন করে শুরু করো, যেন লাফ না দেয়
+  if (pointers.size) start = { g: gestureInfo(), v: { ...view } };
+}
+stage.addEventListener('pointerup', endPointer);
+stage.addEventListener('pointercancel', endPointer);
+
+// PC-তে mouse wheel দিয়ে বড়-ছোট (টেস্ট করার জন্য)
+stage.addEventListener('wheel', (e) => {
+  if (locked || !current) return;
+  view.s *= e.deltaY < 0 ? 1.05 : 0.95;
+  applyView();
+}, { passive: true });
+
+// ---------- ৩. বাটনগুলো ----------
+$('opacity').oninput = (e) => {
+  design.style.opacity = e.target.value / 100;
+  store('opacity', e.target.value);
+};
+$('lockBtn').onclick = () => {
+  locked = !locked;
+  $('lockBtn').textContent = locked ? '🔒 লক' : '🔓 সরানো যাবে';
+  $('lockBtn').classList.toggle('on', locked);
+  document.body.classList.toggle('locked', locked);
+};
+$('diffBtn').onclick = () => {
+  const on = design.classList.toggle('diff');
+  $('diffBtn').classList.toggle('on', on);
+};
+$('resetBtn').onclick = () => current && fitView();
+$('hideBtn').onclick = () => document.body.classList.add('hide-ui');
+$('showUi').onclick = () => document.body.classList.remove('hide-ui');
+
+// ---------- ৪. ডিজাইন যোগ করা ও মনে রাখা (IndexedDB) ----------
+// ফোনে ছবিগুলো সেভ থাকবে, পরের বার খুললে আবার দিতে হবে না
+let db = null;
+function openDB() {
+  return new Promise((res) => {
+    try {
+      const req = indexedDB.open('poster-overlay', 1);
+      req.onupgradeneeded = () => req.result.createObjectStore('designs', { keyPath: 'id' });
+      req.onsuccess = () => res(req.result);
+      req.onerror = () => res(null);
+    } catch { res(null); }
+  });
+}
+function dbAll() {
+  return new Promise((res) => {
+    if (!db) return res([]);
+    const r = db.transaction('designs').objectStore('designs').getAll();
+    r.onsuccess = () => res(r.result || []); r.onerror = () => res([]);
+  });
+}
+function dbPut(item) { try { db?.transaction('designs', 'readwrite').objectStore('designs').put(item); } catch {} }
+function dbDel(id)   { try { db?.transaction('designs', 'readwrite').objectStore('designs').delete(id); } catch {} }
+
+// ছোট সেটিংস localStorage-এ (না চললেও সমস্যা নেই)
+function store(k, v) { try { localStorage.setItem('po-' + k, JSON.stringify(v)); } catch {} }
+function load(k, d) { try { const v = localStorage.getItem('po-' + k); return v ? JSON.parse(v) : d; } catch { return d; } }
+function saveViews() {
+  const all = {}; designs.forEach(d => all[d.id] = d.view);
+  store('views', all);
+  store('current', current?.id);
+}
+
+$('file').onchange = async (e) => {
+  for (const f of e.target.files) {
+    const item = { id: Date.now() + '-' + Math.random().toString(36).slice(2, 7), blob: f };
+    dbPut(item);
+    addDesign(item);
+  }
+  e.target.value = '';
+  select(designs[designs.length - 1]);
+};
+
+function addDesign(item, savedView) {
+  const d = { id: item.id, url: URL.createObjectURL(item.blob), view: savedView || null };
+  designs.push(d);
+  renderThumbs();
+  return d;
+}
+
+function renderThumbs() {
+  const box = $('thumbs'); box.innerHTML = '';
+  designs.forEach((d) => {
+    const im = document.createElement('img');
+    im.src = d.url;
+    if (d === current) im.className = 'active';
+    im.onclick = () => select(d);
+    box.appendChild(im);
+  });
+}
+
+function select(d) {
+  current = d;
+  msg.hidden = true;
+  design.onload = () => { if (d.view) { view = { ...d.view }; applyView(); } else fitView(); };
+  design.src = d.url;
+  renderThumbs();
+  saveViews();
+}
+
+$('delBtn').onclick = () => {
+  if (!current || !confirm('এই ডিজাইনটা মুছে ফেলবে?')) return;
+  dbDel(current.id);
+  URL.revokeObjectURL(current.url);
+  designs = designs.filter(d => d !== current);
+  current = null; design.removeAttribute('src');
+  if (designs.length) select(designs[0]);
+  else { renderThumbs(); msg.hidden = false; }
+  saveViews();
+};
+
+// ---------- শুরু ----------
+(async function init() {
+  const op = load('opacity', 50);
+  $('opacity').value = op; design.style.opacity = op / 100;
+
+  db = await openDB();
+  const views = load('views', {});
+  const items = await dbAll();
+  items.forEach(it => addDesign(it, views[it.id]));
+  const last = designs.find(d => d.id === load('current', null)) || designs[0];
+  if (last) select(last);
+
+  startCamera();
+  keepAwake();
+})();
+</script>
+</body>
+</html>
