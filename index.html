@@ -4,15 +4,21 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover">
 <meta name="theme-color" content="#000000">
-<title>Poster Overlay</title>
+<meta name="mobile-web-app-capable" content="yes">
+<title>Poster AR</title>
+<link rel="manifest" href="manifest.webmanifest">
+<link rel="icon" href="icon-192.png">
+<link rel="apple-touch-icon" href="icon-192.png">
 <style>
   /* রং আর মাপ এক জায়গায় রাখা হলো */
   :root {
     --bg: #000;
-    --panel: rgba(20, 20, 20, 0.78);
+    --panel: rgba(20, 20, 20, 0.8);
     --text: #fff;
     --muted: #bbb;
     --accent: #ffb020;
+    --good: #2f8cff;   /* ঠিক জায়গা = নীল */
+    --bad: #ff3b30;    /* ভুল/খালি = লাল */
     --radius: 14px;
   }
   * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
@@ -22,34 +28,39 @@
     background: var(--bg); color: var(--text);
     font-family: system-ui, "Noto Sans Bengali", sans-serif;
     touch-action: none; /* ব্রাউজারের নিজের zoom/scroll বন্ধ, আমরা নিজেরা gesture ধরব */
+    user-select: none;
   }
 
   /* ক্যামেরার ভিডিও পুরো স্ক্রিন জুড়ে */
-  #cam {
-    position: fixed; inset: 0; width: 100%; height: 100%;
-    object-fit: cover; background: #111;
-  }
-
-  /* ডিজাইনের ছবি রাখার জায়গা (এটাকেই সরানো/বড়-ছোট করা হয়) */
+  #cam { position: fixed; inset: 0; width: 100%; height: 100%; object-fit: cover; background: #111; }
+  /* ডিজাইনের ছবি রাখার জায়গা */
   #stage { position: fixed; inset: 0; overflow: hidden; }
   #design {
-    position: absolute; left: 50%; top: 50%;
-    transform-origin: center center;
-    max-width: none; pointer-events: none; user-select: none;
-    opacity: 0.5;
+    position: absolute; left: 50%; top: 50%; transform-origin: center center;
+    max-width: none; pointer-events: none; opacity: 0.5;
   }
   #design.diff { mix-blend-mode: difference; }
+  /* বক্স আঁকার ক্যানভাস (ছবির উপরে, বাটনের নিচে) */
+  #ov { position: fixed; inset: 0; width: 100%; height: 100%; pointer-events: none; z-index: 3; }
 
-  /* উপরের বার */
-  .bar {
-    position: fixed; left: 0; right: 0; display: flex; gap: 8px;
-    align-items: center; padding: 10px 12px; z-index: 5;
+  /* মোড অনুযায়ী দেখানো: চিহ্ন মোডে ছবি পুরো, চেক মোডে ছবি লুকানো */
+  body[data-mode=mark] #design { opacity: 1 !important; mix-blend-mode: normal; }
+  body[data-mode=mark] #cam { opacity: .15; }
+  body[data-mode=check] #design { opacity: 0 !important; }
+  /* data-show="align mark" — শুধু ঐ মোডগুলোতে দেখাবে */
+  body[data-mode=align] [data-show]:not([data-show~=align]),
+  body[data-mode=mark]  [data-show]:not([data-show~=mark]),
+  body[data-mode=check] [data-show]:not([data-show~=check]) { display: none !important; }
+
+  .bar { position: fixed; left: 0; right: 0; display: flex; gap: 8px; padding: 10px 12px; z-index: 5; }
+  #top {
+    top: 0; flex-direction: column; padding-top: max(10px, env(safe-area-inset-top));
+    background: linear-gradient(rgba(0,0,0,.7), transparent);
   }
-  #top { top: 0; padding-top: max(10px, env(safe-area-inset-top)); flex-wrap: wrap; }
   #bottom {
     bottom: 0; flex-direction: column; align-items: stretch;
     padding-bottom: max(12px, env(safe-area-inset-bottom));
-    background: linear-gradient(transparent, rgba(0,0,0,.75) 35%);
+    background: linear-gradient(transparent, rgba(0,0,0,.8) 30%);
   }
   .hide-ui .bar { display: none; }
 
@@ -59,65 +70,90 @@
     cursor: pointer; white-space: nowrap;
   }
   button.on { background: var(--accent); color: #000; border-color: var(--accent); }
-  .row { display: flex; gap: 10px; align-items: center; }
-  .row label { font-size: 13px; color: var(--muted); min-width: 64px; }
-  input[type=range] { flex: 1; accent-color: var(--accent); height: 28px; }
+  .row { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+  .row label { font-size: 13px; color: var(--muted); min-width: 60px; }
+  input[type=range] { flex: 1; min-width: 120px; accent-color: var(--accent); height: 30px; }
+  .tabs { display: flex; gap: 6px; }
+  .tabs button { flex: 1; padding: 10px 6px; font-weight: 600; }
+  #hint { font-size: 13px; color: #ddd; line-height: 1.4; text-shadow: 0 1px 3px #000; }
+  #zoomVal { min-width: 40px; text-align: right; font-size: 13px; }
 
-  /* ডিজাইনের ছোট ছবিগুলোর সারি */
-  #thumbs { display: flex; gap: 8px; overflow-x: auto; padding: 4px 0; touch-action: pan-x; }
-  #thumbs img {
-    height: 52px; border-radius: 8px; border: 2px solid transparent; flex: none;
-  }
+  #thumbs { display: flex; gap: 8px; overflow-x: auto; padding: 4px 0; touch-action: pan-x; flex: 1; }
+  #thumbs img { height: 52px; border-radius: 8px; border: 2px solid transparent; flex: none; }
   #thumbs img.active { border-color: var(--accent); }
 
-  /* মাঝখানে মেসেজ (যেমন: ক্যামেরা চালু হয়নি) */
+  /* চেক মোডের স্কোর: "৮/১৪ ঠিক" */
+  #status { font-size: 20px; font-weight: 700; text-align: center; padding: 8px; border-radius: var(--radius); background: var(--panel); }
+  #status.all { background: var(--good); }
+
   #msg {
     position: fixed; left: 16px; right: 16px; top: 50%; transform: translateY(-50%);
     text-align: center; z-index: 4; font-size: 16px; line-height: 1.6;
     background: var(--panel); border-radius: var(--radius); padding: 18px;
   }
-  #msg[hidden] { display: none; }
+  #toast {
+    position: fixed; left: 50%; top: 45%; transform: translate(-50%, -50%); z-index: 9;
+    background: rgba(0,0,0,.85); padding: 12px 16px; border-radius: var(--radius);
+    font-size: 15px; text-align: center; max-width: 86vw; pointer-events: none;
+    transition: opacity .3s; opacity: 0;
+  }
+  #toast.show { opacity: 1; }
 
-  /* UI লুকানো থাকলে আবার দেখানোর ছোট বাটন */
-  #showUi {
-    position: fixed; right: 12px; bottom: max(12px, env(safe-area-inset-bottom));
-    z-index: 6; display: none;
-  }
+  #showUi { position: fixed; right: 12px; bottom: max(12px, env(safe-area-inset-bottom)); z-index: 6; display: none; }
   .hide-ui #showUi { display: block; }
-  #lockBadge {
-    position: fixed; left: 12px; bottom: max(12px, env(safe-area-inset-bottom));
-    z-index: 6; display: none; font-size: 13px;
-  }
-  .hide-ui.locked #lockBadge { display: block; }
 </style>
 </head>
-<body>
+<body data-mode="align">
   <video id="cam" autoplay playsinline muted></video>
   <div id="stage"><img id="design" alt=""></div>
+  <canvas id="ov"></canvas>
 
   <div id="msg">
-    <b>Poster Overlay</b><br>
-    নিচে <b>＋ ডিজাইন</b> চাপ দিয়ে তোমার ডিজাইনের ছবি দাও।<br>
-    তারপর যেখান থেকে ছবি তোলা হয়েছিল সেখানে দাঁড়িয়ে দেওয়াল মিলিয়ে নাও।
+    <b>Poster AR</b><br>
+    নিচে <b>＋ ডিজাইন</b> চাপ দিয়ে তোমার দেওয়ালের ডিজাইনের ছবি দাও।
   </div>
+  <div id="toast"></div>
 
   <div id="top" class="bar">
-    <button id="lockBtn">🔓 সরানো যাবে</button>
-    <button id="diffBtn" title="রং উল্টে দেখায়, মেলানো সহজ হয়">মিলাও মোড</button>
-    <button id="resetBtn">↺ রিসেট</button>
-    <button id="hideBtn">👁 লুকাও</button>
+    <!-- ৩টা ধাপ: সাজাও → চিহ্ন দাও → চেক -->
+    <div class="tabs">
+      <button data-tab="align">① সাজাও</button>
+      <button data-tab="mark">② চিহ্ন</button>
+      <button data-tab="check">③ চেক</button>
+      <button id="hideBtn" style="flex:none">👁</button>
+    </div>
+    <div class="row">
+      <button id="lockBtn" data-show="align">🔓 সরানো যাবে</button>
+      <button id="diffBtn" data-show="align" title="রং উল্টে দেখায়, মেলানো সহজ হয়">মিলাও মোড</button>
+      <button id="resetBtn" data-show="align">↺</button>
+      <button id="autoBtn" data-show="mark">✨ সব নিজে খুঁজো</button>
+      <button id="undoBtn" data-show="mark">↶ আনডু</button>
+      <button id="clearBtn" data-show="mark">🗑 সব বক্স</button>
+      <button id="ghostBtn" data-show="check" class="on">👻 কোনটা কোথায়</button>
+      <button id="fsBtn">⛶</button>
+      <button id="installBtn" hidden>📲 ইনস্টল</button>
+    </div>
+    <div id="hint"></div>
   </div>
 
   <div id="bottom" class="bar">
-    <div class="row">
+    <div id="status" data-show="check">—</div>
+    <div class="row" data-show="check">
+      <label for="sens">কড়াকড়ি</label>
+      <input id="sens" type="range" min="30" max="90" value="55">
+    </div>
+    <div class="row" data-show="align">
       <label for="opacity">স্বচ্ছতা</label>
       <input id="opacity" type="range" min="0" max="100" value="50">
     </div>
-    <div class="row" id="zoomRow" hidden>
-      <label for="zoom">ক্যামেরা zoom</label>
+    <div class="row" id="zoomRow" data-show="align check" hidden>
+      <label for="zoom">zoom</label>
+      <button id="zOut">−</button>
       <input id="zoom" type="range" min="1" max="1" step="0.1" value="1">
+      <button id="zIn">＋</button>
+      <span id="zoomVal">1.0x</span>
     </div>
-    <div class="row">
+    <div class="row" data-show="align mark" style="flex-wrap:nowrap">
       <label class="btn" for="file" style="min-width:auto">＋ ডিজাইন</label>
       <input id="file" type="file" accept="image/*" multiple hidden>
       <div id="thumbs"></div>
@@ -126,146 +162,582 @@
   </div>
 
   <button id="showUi">⚙</button>
-  <div id="lockBadge" class="btn">🔒 লক</div>
 
 <script>
-// ---------- ছোট হেল্পার ----------
+// ================= ছোট হেল্পার =================
 const $ = (id) => document.getElementById(id);
-const cam = $('cam'), design = $('design'), msg = $('msg');
+const cam = $('cam'), design = $('design'), msg = $('msg'), ov = $('ov');
+const octx = ov.getContext('2d');
+const bn = (n) => String(n).replace(/\d/g, (d) => '০১২৩৪৫৬৭৮৯'[d]); // বাংলা সংখ্যা
+const clamp = (v, a, b) => Math.max(a, Math.min(b, v));
+const W = () => innerWidth, H = () => innerHeight;
 
-// ডিজাইনের অবস্থান: x,y = মাঝখান থেকে কত সরানো; s = কত বড়; r = কত ডিগ্রি ঘোরানো
+// localStorage (না চললেও অ্যাপ চলবে)
+function store(k, v) { try { localStorage.setItem('po-' + k, JSON.stringify(v)); } catch {} }
+function load(k, d) { try { const v = localStorage.getItem('po-' + k); return v ? JSON.parse(v) : d; } catch { return d; } }
+
+let toastT = 0;
+function toast(text, ms = 2200) {
+  const t = $('toast'); t.textContent = text; t.classList.add('show');
+  clearTimeout(toastT); toastT = setTimeout(() => t.classList.remove('show'), ms);
+}
+function showMsg(html) { msg.innerHTML = html; msg.hidden = false; }
+// কাঁপানো — শুধু ইউজার একবার স্পর্শ করার পর (না হলে ব্রাউজার error দেয়)
+function buzz(p) { if (navigator.userActivation?.hasBeenActive) navigator.vibrate?.(p); }
+
+// ================= অবস্থা (state) =================
+// view = দেওয়ালের সাথে মেলানো অবস্থান; markView = চিহ্ন দেওয়ার সময় পুরো ছবি দেখানোর অবস্থান
 let view = { x: 0, y: 0, s: 1, r: 0 };
-let locked = false;
-let designs = [];      // [{id, url, view}]
-let current = null;    // এখন যে ডিজাইন দেখাচ্ছে
+let markView = { x: 0, y: 0, s: 1, r: 0 };
+let mode = 'align';
+let locked = load('locked', false);
+let designs = [];        // [{id, url, view}]
+let current = null;      // এখন যে ডিজাইন
+let boxesAll = load('boxes', {});   // {designId: [{x,y,w,h}]} — ছবির আসল পিক্সেলে
+let history = [];        // আনডুর জন্য
+let scores = [], good = [];          // চেক মোডে প্রতিটা বক্সের স্কোর আর নীল/লাল
+let ghost = load('ghost', true);
+let sens = load('sens', 55);
 
-// ---------- ১. ক্যামেরা চালু করা ----------
+const boxes = () => (current ? (boxesAll[current.id] ||= []) : []);
+const T = () => (mode === 'mark' ? markView : view);   // এখন কোন অবস্থান চলছে
+
+// ছবির পিক্সেল (u,v) → স্ক্রিনের পিক্সেল (X,Y)
+function toScreen(u, v, t = T()) {
+  const nw = design.naturalWidth, nh = design.naturalHeight;
+  const a = t.r * Math.PI / 180, c = Math.cos(a), s = Math.sin(a);
+  const dx = (u - nw / 2) * t.s, dy = (v - nh / 2) * t.s;
+  return [W() / 2 + t.x + dx * c - dy * s, H() / 2 + t.y + dx * s + dy * c];
+}
+// উল্টোটা: স্ক্রিন → ছবি
+function toMock(X, Y, t = T()) {
+  const nw = design.naturalWidth, nh = design.naturalHeight;
+  const a = t.r * Math.PI / 180, c = Math.cos(a), s = Math.sin(a);
+  const ex = X - W() / 2 - t.x, ey = Y - H() / 2 - t.y;
+  return [(ex * c + ey * s) / t.s + nw / 2, (-ex * s + ey * c) / t.s + nh / 2];
+}
+
+// ================= ১. ক্যামেরা (নিজে নিজে ঠিক হয়ে যায়) =================
+let stream = null, track = null, camStarting = false, camDenied = false;
+let fakeCam = false;   // টেস্টের জন্য নকল ক্যামেরা
+let lastCT = -1, lastFrame = 0, bad = 0;
+
+function stopCamera() {
+  stream?.getTracks().forEach((t) => t.stop());
+  stream = null; track = null; cam.srcObject = null;
+}
+
 async function startCamera() {
+  if (fakeCam || camStarting) return;
   if (!navigator.mediaDevices?.getUserMedia) {
     showMsg('এই ব্রাউজারে ক্যামেরা চলে না। Chrome দিয়ে খোলো (https লিংকে)।');
     return;
   }
+  camStarting = true;
+  stopCamera(); // পুরোনোটা আগে বন্ধ, নাহলে ক্যামেরা আটকে কালো হয়ে থাকে
   try {
-    // পেছনের ক্যামেরা চাই, যত বড় রেজোলিউশন পাওয়া যায়
-    const stream = await navigator.mediaDevices.getUserMedia({
+    const s = await navigator.mediaDevices.getUserMedia({
       audio: false,
       video: { facingMode: { ideal: 'environment' }, width: { ideal: 1920 }, height: { ideal: 1080 } }
     });
-    cam.srcObject = stream;
-    setupZoom(stream.getVideoTracks()[0]);
+    if (document.hidden) { s.getTracks().forEach((t) => t.stop()); return; }
+    stream = s; track = s.getVideoTracks()[0];
+    cam.srcObject = s;
+    await cam.play().catch(() => {});
+    lastFrame = performance.now(); bad = 0;
+    camDenied = false; msg.hidden = true;   // ক্যামেরা চললে পুরনো error বার্তা সরাও
+    setupZoom();
   } catch (e) {
+    if (e.name === 'NotAllowedError') camDenied = true;
     showMsg('ক্যামেরা চালু হয়নি 😕<br>ব্রাউজারকে ক্যামেরার অনুমতি দাও, তারপর পেজ রিলোড করো।<br><small>(' + e.name + ')</small>');
-  }
+  } finally { camStarting = false; }
 }
 
-// ফোনের ক্যামেরা যদি zoom সাপোর্ট করে, তাহলে slider দেখাও
-function setupZoom(track) {
-  const caps = track?.getCapabilities?.();
-  if (!caps?.zoom) return;
-  const z = $('zoom');
-  z.min = caps.zoom.min; z.max = caps.zoom.max; z.step = caps.zoom.step || 0.1;
-  z.value = track.getSettings().zoom || caps.zoom.min;
-  $('zoomRow').hidden = false;
-  z.oninput = () => track.applyConstraints({ advanced: [{ zoom: Number(z.value) }] }).catch(() => {});
-}
+// পাহারাদার: প্রতি ১.৫ সেকেন্ডে দেখে ভিডিও চলছে কিনা। থেমে/কালো হলে আবার চালু করে।
+setInterval(() => {
+  if (document.hidden || fakeCam || camStarting || camDenied) return;
+  if (cam.currentTime !== lastCT) { lastCT = cam.currentTime; lastFrame = performance.now(); }
+  const live = track && track.readyState === 'live';
+  if (live && cam.paused) cam.play().catch(() => {});
+  const stuck = !live || !cam.videoWidth || performance.now() - lastFrame > 3000;
+  if (stuck) { if (++bad >= 2) { bad = 0; startCamera(); } } else bad = 0;
+}, 1500);
 
-function showMsg(html) { msg.innerHTML = html; msg.hidden = false; }
-
-// স্ক্রিন যেন বন্ধ না হয়ে যায় (পোস্টার লাগানোর সময় কাজে লাগে)
-let wakeLock = null;
-async function keepAwake() {
-  try { wakeLock = await navigator.wakeLock?.request('screen'); } catch {}
-}
+// অ্যাপ থেকে বের হলে ক্যামেরা ছেড়ে দাও, ফিরলে আবার চালু
 document.addEventListener('visibilitychange', () => {
-  if (document.visibilityState === 'visible') keepAwake();
+  if (document.hidden) { if (!fakeCam) stopCamera(); }
+  else { keepAwake(); startCamera(); }
 });
 
-// ---------- ২. ডিজাইন সাজানো (সরানো, বড়-ছোট, ঘোরানো) ----------
-function applyView() {
-  design.style.transform =
-    `translate(-50%,-50%) translate(${view.x}px,${view.y}px) rotate(${view.r}deg) scale(${view.s})`;
-  if (current) { current.view = { ...view }; saveViews(); }
+// ---- ক্যামেরা zoom ----
+let zoomWant = load('zoom', null);
+function setupZoom() {
+  const caps = track?.getCapabilities?.();
+  if (!caps?.zoom) { $('zoomRow').hidden = true; return; }
+  const z = $('zoom');
+  z.min = caps.zoom.min; z.max = caps.zoom.max; z.step = caps.zoom.step || 0.1;
+  $('zoomRow').hidden = false;
+  // আগের zoom মনে রেখে আবার বসাও (ক্যামেরা restart হলেও)
+  applyZoom(zoomWant ?? track.getSettings().zoom ?? caps.zoom.min);
 }
+let zoomBusy = false, zoomNext = null;
+async function applyZoom(v) {
+  const z = $('zoom');
+  v = clamp(Number(v), Number(z.min), Number(z.max));
+  z.value = v; $('zoomVal').textContent = v.toFixed(1) + 'x';
+  zoomWant = v; store('zoom', v);
+  if (!track) return;
+  // এক সাথে অনেকবার পাঠালে ফোন আটকে যায়, তাই একটার পর একটা
+  if (zoomBusy) { zoomNext = v; return; }
+  zoomBusy = true;
+  try { await track.applyConstraints({ advanced: [{ zoom: v }] }); }
+  catch (e) { toast('zoom হয়নি: ' + e.name); }
+  zoomBusy = false;
+  if (zoomNext !== null) { const n = zoomNext; zoomNext = null; applyZoom(n); }
+}
+$('zoom').oninput = (e) => applyZoom(e.target.value);
+$('zIn').onclick = () => applyZoom(Number($('zoom').value) + 0.5);
+$('zOut').onclick = () => applyZoom(Number($('zoom').value) - 0.5);
 
-// শুরুতে ছবিটা স্ক্রিনের চওড়ায় বসাও
+// স্ক্রিন যেন বন্ধ না হয়
+async function keepAwake() { try { await navigator.wakeLock?.request('screen'); } catch {} }
+
+// ================= ২. ছবি দেখানো আর সাজানো =================
+function render() {
+  const t = T();
+  design.style.transform = `translate(-50%,-50%) translate(${t.x}px,${t.y}px) rotate(${t.r}deg) scale(${t.s})`;
+  drawOverlay();
+}
+function applyView() {
+  render();
+  if (current && mode === 'align') { current.view = { ...view }; saveViews(); }
+}
+// পুরো ছবিটা স্ক্রিনে ধরিয়ে দাও
 function fitView() {
   const w = design.naturalWidth || 1, h = design.naturalHeight || 1;
-  // শুরুতে পুরো ছবিটা যেন স্ক্রিনে দেখা যায় (কিছু কাটা না পড়ে), পরে আঙুলে বড় করা যাবে
-  const s = Math.min(innerWidth / w, innerHeight / h);
-  view = { x: 0, y: 0, s, r: 0 };
+  view = { x: 0, y: 0, s: Math.min(W() / w, H() / h), r: 0 };
   applyView();
 }
+function fitMark() {
+  const w = design.naturalWidth || 1, h = design.naturalHeight || 1;
+  const top = $('top').offsetHeight, bottom = $('bottom').offsetHeight;
+  const s = Math.min(W() / w, (H() - top - bottom - 16) / h) * 0.96;
+  markView = { x: 0, y: (top - bottom) / 2, s, r: 0 };
+  render();
+}
 
-// আঙুলের gesture: এক আঙুলে সরাও, দুই আঙুলে বড়-ছোট আর ঘোরাও
+// ---- আঙুলের gesture ----
 const pointers = new Map();
-let start = null;
-
+let start = null, draw = null;
 function gestureInfo() {
   const p = [...pointers.values()];
   if (p.length === 1) return { cx: p[0].x, cy: p[0].y, dist: 1, ang: 0 };
   const [a, b] = p;
-  return {
-    cx: (a.x + b.x) / 2, cy: (a.y + b.y) / 2,
-    dist: Math.hypot(b.x - a.x, b.y - a.y),
-    ang: Math.atan2(b.y - a.y, b.x - a.x) * 180 / Math.PI
-  };
+  return { cx: (a.x + b.x) / 2, cy: (a.y + b.y) / 2, dist: Math.hypot(b.x - a.x, b.y - a.y),
+           ang: Math.atan2(b.y - a.y, b.x - a.x) * 180 / Math.PI };
 }
-
 const stage = $('stage');
 stage.addEventListener('pointerdown', (e) => {
-  if (locked || !current) return;
+  if (!current || mode === 'check' || (mode === 'align' && locked)) return;
   stage.setPointerCapture(e.pointerId);
   pointers.set(e.pointerId, { x: e.clientX, y: e.clientY });
-  start = { g: gestureInfo(), v: { ...view } };
+  // চিহ্ন মোডে ১ আঙুল = বক্স আঁকা/ট্যাপ, ২ আঙুল = ছবি সরানো/বড় করা
+  draw = (mode === 'mark' && pointers.size === 1) ? { x0: e.clientX, y0: e.clientY, x1: e.clientX, y1: e.clientY } : null;
+  start = { g: gestureInfo(), v: { ...T() } };
 });
 stage.addEventListener('pointermove', (e) => {
   if (!pointers.has(e.pointerId)) return;
   pointers.set(e.pointerId, { x: e.clientX, y: e.clientY });
-  const g = gestureInfo();
-  view.x = start.v.x + (g.cx - start.g.cx);
-  view.y = start.v.y + (g.cy - start.g.cy);
+  if (draw) { draw.x1 = e.clientX; draw.y1 = e.clientY; drawOverlay(); return; }
+  const g = gestureInfo(), t = T();
+  t.x = start.v.x + (g.cx - start.g.cx);
+  t.y = start.v.y + (g.cy - start.g.cy);
   if (pointers.size >= 2) {
-    view.s = start.v.s * (g.dist / start.g.dist);
-    view.r = start.v.r + (g.ang - start.g.ang);
+    t.s = start.v.s * (g.dist / start.g.dist);
+    if (mode === 'align') t.r = start.v.r + (g.ang - start.g.ang); // চিহ্ন মোডে ঘোরানো বন্ধ
   }
-  applyView();
+  render();
 });
 function endPointer(e) {
+  if (!pointers.has(e.pointerId)) return;
   pointers.delete(e.pointerId);
-  // একটা আঙুল তুললে বাকিগুলো থেকে নতুন করে শুরু করো, যেন লাফ না দেয়
-  if (pointers.size) start = { g: gestureInfo(), v: { ...view } };
+  if (draw && pointers.size === 0) { const d = draw; draw = null; finishDraw(d); }
+  if (pointers.size) start = { g: gestureInfo(), v: { ...T() } };
+  if (mode === 'align') applyView(); // অবস্থান সেভ
 }
 stage.addEventListener('pointerup', endPointer);
-stage.addEventListener('pointercancel', endPointer);
-
-// PC-তে mouse wheel দিয়ে বড়-ছোট (টেস্ট করার জন্য)
-stage.addEventListener('wheel', (e) => {
-  if (locked || !current) return;
-  view.s *= e.deltaY < 0 ? 1.05 : 0.95;
-  applyView();
+stage.addEventListener('pointercancel', (e) => { draw = null; endPointer(e); drawOverlay(); });
+stage.addEventListener('wheel', (e) => {  // PC-তে টেস্টের জন্য
+  if (!current || mode === 'check' || (mode === 'align' && locked)) return;
+  T().s *= e.deltaY < 0 ? 1.05 : 0.95;
+  mode === 'align' ? applyView() : render();
 }, { passive: true });
 
-// ---------- ৩. বাটনগুলো ----------
-$('opacity').oninput = (e) => {
-  design.style.opacity = e.target.value / 100;
-  store('opacity', e.target.value);
+// ================= ৩. পোস্টারের জায়গা চিহ্ন দেওয়া =================
+function saveBoxes() { store('boxes', boxesAll); scores = []; good = []; drawOverlay(); }
+function pushHistory() { history.push(JSON.stringify(boxes())); if (history.length > 30) history.shift(); }
+
+function finishDraw(d) {
+  if (Math.hypot(d.x1 - d.x0, d.y1 - d.y0) < 12) return tapAt(d.x0, d.y0); // ছোট নড়াচড়া = ট্যাপ
+  const [u0, v0] = toMock(Math.min(d.x0, d.x1), Math.min(d.y0, d.y1));
+  const [u1, v1] = toMock(Math.max(d.x0, d.x1), Math.max(d.y0, d.y1));
+  addBox(clipBox({ x: u0, y: v0, w: u1 - u0, h: v1 - v0 }));
+}
+function clipBox(b) {
+  const nw = design.naturalWidth, nh = design.naturalHeight;
+  const x0 = clamp(b.x, 0, nw), y0 = clamp(b.y, 0, nh), x1 = clamp(b.x + b.w, 0, nw), y1 = clamp(b.y + b.h, 0, nh);
+  return { x: x0, y: y0, w: x1 - x0, h: y1 - y0 };
+}
+function addBox(b) {
+  if (b.w < 4 || b.h < 4) return;
+  pushHistory(); boxes().push(b); saveBoxes();
+  toast('বক্স ' + bn(boxes().length) + ' যোগ হলো ✓', 1200);
+}
+function tapAt(X, Y) {
+  const [u, v] = toMock(X, Y);
+  const list = boxes();
+  // আগের বক্সে ট্যাপ করলে মুছে যাবে
+  for (let i = list.length - 1; i >= 0; i--) {
+    const b = list[i];
+    if (u >= b.x && u <= b.x + b.w && v >= b.y && v <= b.y + b.h) {
+      pushHistory(); list.splice(i, 1); saveBoxes();
+      return toast('বক্স ' + bn(i + 1) + ' মুছে গেছে (↶ দিয়ে ফেরত আনা যাবে)');
+    }
+  }
+  const b = detectAt(u, v);
+  if (b) addBox(b);
+  else toast('এখানে পোস্টার খুঁজে পাইনি 🤔\nআঙুল টেনে বক্স আঁকো', 2600);
+}
+
+// ---- ছবি থেকে পোস্টার নিজে খোঁজা ----
+// বুদ্ধি: দেওয়ালের রং (সবচেয়ে বেশি যে রং) বাদে বাকি অংশগুলো এক একটা পোস্টার
+let md = null; // {w, h, ds, mask}
+function prepMock() {
+  const nw = design.naturalWidth, nh = design.naturalHeight;
+  const ds = Math.min(1, 480 / Math.max(nw, nh));
+  const w = Math.max(1, Math.round(nw * ds)), h = Math.max(1, Math.round(nh * ds));
+  const c = document.createElement('canvas'); c.width = w; c.height = h;
+  const x = c.getContext('2d', { willReadFrequently: true });
+  x.drawImage(design, 0, 0, w, h);
+  const d = x.getImageData(0, 0, w, h).data;
+  // রঙের হিস্টোগ্রাম → দেওয়ালের রং
+  const cnt = new Uint32Array(4096), sum = new Float64Array(4096 * 3);
+  for (let i = 0; i < d.length; i += 4) {
+    if (d[i + 3] < 128) continue;
+    const k = (d[i] >> 4) << 8 | (d[i + 1] >> 4) << 4 | (d[i + 2] >> 4);
+    cnt[k]++; sum[k * 3] += d[i]; sum[k * 3 + 1] += d[i + 1]; sum[k * 3 + 2] += d[i + 2];
+  }
+  let best = 0; for (let k = 1; k < 4096; k++) if (cnt[k] > cnt[best]) best = k;
+  const n = cnt[best] || 1, wr = sum[best * 3] / n, wg = sum[best * 3 + 1] / n, wb = sum[best * 3 + 2] / n;
+  // দেওয়াল না = 1
+  const m = new Uint8Array(w * h);
+  for (let p = 0, i = 0; p < w * h; p++, i += 4) {
+    const diff = Math.max(Math.abs(d[i] - wr), Math.abs(d[i + 1] - wg), Math.abs(d[i + 2] - wb));
+    m[p] = d[i + 3] >= 128 && diff > 36 ? 1 : 0;
+  }
+  // ১ পিক্সেল মোটা করা, যেন পোস্টারের ভেতরের সাদা অংশে ভেঙে না যায়
+  const m2 = new Uint8Array(w * h);
+  for (let y = 0; y < h; y++) for (let xx = 0; xx < w; xx++) {
+    const p = y * w + xx;
+    m2[p] = m[p] || (xx > 0 && m[p - 1]) || (xx < w - 1 && m[p + 1]) || (y > 0 && m[p - w]) || (y < h - 1 && m[p + w]) ? 1 : 0;
+  }
+  md = { w, h, ds, mask: m2 };
+}
+// একটা জায়গা থেকে জোড়া লাগানো অংশটা বের করো (flood fill)
+function grow(seed, vis) {
+  const { w, h, mask } = md;
+  const q = new Int32Array(w * h); let qh = 0, qt = 0;
+  q[qt++] = seed; vis[seed] = 1;
+  let minx = w, miny = h, maxx = 0, maxy = 0, count = 0;
+  while (qh < qt) {
+    const p = q[qh++], x = p % w, y = (p / w) | 0; count++;
+    if (x < minx) minx = x; if (x > maxx) maxx = x; if (y < miny) miny = y; if (y > maxy) maxy = y;
+    const nb = [x > 0 ? p - 1 : -1, x < w - 1 ? p + 1 : -1, y > 0 ? p - w : -1, y < h - 1 ? p + w : -1];
+    for (const k of nb) if (k >= 0 && mask[k] && !vis[k]) { vis[k] = 1; q[qt++] = k; }
+  }
+  return { minx, miny, maxx, maxy, count };
+}
+function compToBox(c) {
+  const ds = md.ds; // মোটা করার ১ পিক্সেল বাদ দাও
+  return clipBox({ x: (c.minx + 1) / ds, y: (c.miny + 1) / ds, w: (c.maxx - c.minx - 1) / ds, h: (c.maxy - c.miny - 1) / ds });
+}
+function detectAt(u, v) {
+  if (!md) return null;
+  const { w, h, mask, ds } = md;
+  const px = Math.round(u * ds), py = Math.round(v * ds);
+  let seed = -1;
+  for (let r = 0; r <= 8 && seed < 0; r++)
+    for (let dy = -r; dy <= r && seed < 0; dy++) for (let dx = -r; dx <= r; dx++) {
+      if (Math.max(Math.abs(dx), Math.abs(dy)) !== r) continue;
+      const x = px + dx, y = py + dy;
+      if (x >= 0 && y >= 0 && x < w && y < h && mask[y * w + x]) { seed = y * w + x; break; }
+    }
+  if (seed < 0) return null;
+  const c = grow(seed, new Uint8Array(w * h));
+  const area = (c.maxx - c.minx + 1) * (c.maxy - c.miny + 1);
+  if (c.count < 30 || area > 0.6 * w * h) return null;
+  return compToBox(c);
+}
+// সারি ধরে নাম্বার দাও: উপরের সারি আগে, বাম থেকে ডানে
+function sortBoxes(list) {
+  if (!list.length) return list;
+  const hs = list.map((b) => b.h).sort((a, b) => a - b), mh = hs[hs.length >> 1];
+  const byY = [...list].sort((a, b) => (a.y + a.h / 2) - (b.y + b.h / 2));
+  const rows = []; let row = [], y0 = null;
+  for (const b of byY) {
+    const cy = b.y + b.h / 2;
+    if (y0 !== null && cy - y0 > mh * 0.5) { rows.push(row); row = []; y0 = null; }
+    if (y0 === null) y0 = cy;
+    row.push(b);
+  }
+  rows.push(row);
+  return rows.flatMap((r) => r.sort((a, b) => a.x - b.x));
+}
+function autoDetectAll() {
+  if (!md) return [];
+  const { w, h, mask } = md, vis = new Uint8Array(w * h), out = [];
+  for (let p = 0; p < w * h; p++) {
+    if (!mask[p] || vis[p]) continue;
+    const c = grow(p, vis);
+    const bw = c.maxx - c.minx + 1, bh = c.maxy - c.miny + 1;
+    // খুব ছোট (লেখা/দাগ), খুব বড়, বা চারকোনা না হলে বাদ
+    if (c.count < 0.0015 * w * h || bw < 6 || bh < 6 || bw * bh > 0.5 * w * h || c.count / (bw * bh) < 0.4) continue;
+    out.push(compToBox(c));
+  }
+  return sortBoxes(out);
+}
+$('autoBtn').onclick = () => {
+  if (!current) return;
+  if (boxes().length && !confirm('আগের বক্সগুলো মুছে নতুন করে খুঁজবে?')) return;
+  const found = autoDetectAll();
+  if (!found.length) return toast('কোনো পোস্টার খুঁজে পাইনি 🤔 হাতে বক্স আঁকো');
+  pushHistory(); boxesAll[current.id] = found; saveBoxes();
+  toast('✨ ' + bn(found.length) + 'টা পোস্টার পেলাম। ভুল বক্সে ট্যাপ করলে মুছে যাবে।', 3200);
 };
-$('lockBtn').onclick = () => {
-  locked = !locked;
+$('undoBtn').onclick = () => {
+  if (!current || !history.length) return toast('আনডু করার কিছু নেই');
+  boxesAll[current.id] = JSON.parse(history.pop()); saveBoxes();
+};
+$('clearBtn').onclick = () => {
+  if (!current || !boxes().length || !confirm('সব বক্স মুছবে?')) return;
+  pushHistory(); boxesAll[current.id] = []; saveBoxes();
+};
+
+// ================= ৪. লাইভ চেক: ঠিক জায়গায় = নীল, না হলে লাল =================
+// ক্যামেরার ছবি আর ডিজাইন — দুটোকেই একই ছোট মাপে (স্ক্রিনের মতো করে) এঁকে মিলিয়ে দেখি
+const MW = 320;
+let cc = null, cctx = null, mc = null, mctx = null, mockKey = '', mockData = null, camGray = null, camRGB = null;
+function ensureCanvases() {
+  const w = MW, h = Math.round(H() / W() * MW);
+  if (cc && cc.width === w && cc.height === h) return;
+  cc = document.createElement('canvas'); cc.width = w; cc.height = h;
+  mc = document.createElement('canvas'); mc.width = w; mc.height = h;
+  cctx = cc.getContext('2d', { willReadFrequently: true });
+  mctx = mc.getContext('2d', { willReadFrequently: true });
+  mockKey = '';
+}
+function renderMock() {
+  const key = JSON.stringify([view, W(), H(), current.id]);
+  if (key === mockKey) return;
+  mockKey = key;
+  const k = mc.width / W();
+  mctx.setTransform(1, 0, 0, 1, 0, 0); mctx.clearRect(0, 0, mc.width, mc.height);
+  mctx.filter = 'blur(1px)';
+  mctx.setTransform(k, 0, 0, k, 0, 0);
+  mctx.translate(W() / 2 + view.x, H() / 2 + view.y);
+  mctx.rotate(view.r * Math.PI / 180); mctx.scale(view.s, view.s);
+  mctx.drawImage(design, -design.naturalWidth / 2, -design.naturalHeight / 2);
+  mockData = mctx.getImageData(0, 0, mc.width, mc.height).data;
+}
+function grabCam() {
+  const vw = cam.videoWidth, vh = cam.videoHeight;
+  if (!vw || !vh) return false;
+  const k = cc.width / W(), c = Math.max(W() / vw, H() / vh), dw = vw * c, dh = vh * c;
+  // object-fit: cover এর মতো করেই আঁকি, যেন স্ক্রিনে যা দেখা যায় ঠিক সেটাই আসে
+  cctx.filter = 'blur(1px)';
+  cctx.drawImage(cam, (W() - dw) / 2 * k, (H() - dh) / 2 * k, dw * k, dh * k);
+  camRGB = cctx.getImageData(0, 0, cc.width, cc.height).data;
+  const n = cc.width * cc.height;
+  if (!camGray || camGray.length !== n) camGray = new Float32Array(n);
+  for (let p = 0, i = 0; p < n; p++, i += 4) camGray[p] = 0.299 * camRGB[i] + 0.587 * camRGB[i + 1] + 0.114 * camRGB[i + 2];
+  return true;
+}
+// একটা বক্সের স্কোর (0 থেকে 1)। null = বক্স স্ক্রিনের বাইরে
+function scoreBox(b) {
+  const cw = mc.width, ch = mc.height, k = cw / W(), N = 10;
+  const pts = [], gm = [];
+  let mr = 0, mg = 0, mb = 0;
+  for (let j = 0; j < N; j++) for (let i = 0; i < N; i++) {
+    // কিনারা বাদ দিয়ে ভেতরের ১০x১০ জায়গা
+    const u = b.x + b.w * (0.12 + 0.76 * (i + 0.5) / N), v = b.y + b.h * (0.12 + 0.76 * (j + 0.5) / N);
+    const [X, Y] = toScreen(u, v, view);
+    const px = Math.round(X * k), py = Math.round(Y * k);
+    if (px < 0 || py < 0 || px >= cw || py >= ch) continue;
+    const q = (py * cw + px) * 4;
+    pts.push(px, py);
+    gm.push(0.299 * mockData[q] + 0.587 * mockData[q + 1] + 0.114 * mockData[q + 2]);
+    mr += mockData[q]; mg += mockData[q + 1]; mb += mockData[q + 2];
+  }
+  const n = gm.length;
+  if (n < 30) return null;
+  let mMean = 0; for (const g of gm) mMean += g; mMean /= n;
+  let mVar = 0; for (const g of gm) mVar += (g - mMean) ** 2;
+  const mStd = Math.sqrt(mVar / n);
+  // বক্স কত বড় → কতটুকু সরে থাকলেও মানবে
+  const [x0, y0] = toScreen(b.x, b.y, view), [x1, y1] = toScreen(b.x + b.w, b.y + b.h, view);
+  const R = clamp(Math.round(Math.min(Math.abs(x1 - x0), Math.abs(y1 - y0)) * k * 0.15), 1, 6);
+  let best = -1, bdx = 0, bdy = 0;
+  for (let dy = -R; dy <= R; dy++) for (let dx = -R; dx <= R; dx++) {
+    let cMean = 0;
+    const g = new Float32Array(n);
+    for (let t = 0; t < n; t++) {
+      const x = clamp(pts[2 * t] + dx, 0, cw - 1), y = clamp(pts[2 * t + 1] + dy, 0, ch - 1);
+      g[t] = camGray[y * cw + x]; cMean += g[t];
+    }
+    cMean /= n;
+    let num = 0, cv = 0;
+    for (let t = 0; t < n; t++) { const a = gm[t] - mMean, c = g[t] - cMean; num += a * c; cv += c * c; }
+    const ncc = cv > 0 && mVar > 0 ? num / Math.sqrt(mVar * cv) : 0;  // নকশা কতটা মেলে (আলো কম-বেশি হলেও)
+    if (ncc > best) { best = ncc; bdx = dx; bdy = dy; }
+  }
+  // সেরা জায়গায় ক্যামেরার রং আর নকশার ভিন্নতা
+  let cr = 0, cg = 0, cb = 0, cS = 0, cS2 = 0;
+  for (let t = 0; t < n; t++) {
+    const x = clamp(pts[2 * t] + bdx, 0, cw - 1), y = clamp(pts[2 * t + 1] + bdy, 0, ch - 1), q = (y * cw + x) * 4;
+    cr += camRGB[q]; cg += camRGB[q + 1]; cb += camRGB[q + 2];
+    const gg = camGray[y * cw + x]; cS += gg; cS2 += gg * gg;
+  }
+  const cStd = Math.sqrt(Math.max(0, cS2 / n - (cS / n) ** 2));
+  // রঙের ধরন (উজ্জ্বলতা বাদে) কতটা মেলে। ক্যামেরার পুরো ছবির রঙের টান (white balance) বাদ দিয়ে।
+  const ms = mr + mg + mb || 1, cs = cr + cg + cb || 1;
+  const chroma = Math.hypot(mr / ms - cr / cs - cast[0], mg / ms - cg / cs - cast[1]);
+  const colorSim = clamp(1 - (chroma - 0.03) / 0.12, 0, 1);  // ০.০৩ পর্যন্ত পুরো মিল, ০.১৫ হলে একদম না
+  if (mStd < 8) return colorSim * (cStd < 20 ? 1 : 0.5);   // প্রায় এক রঙা পোস্টার
+  const ncc = cStd < 3 ? 0 : Math.max(0, best);            // খালি দেওয়াল = নকশা নেই
+  // নকশা মিললেও রং না মিললে = ভুল পোস্টার, তাই গুণ করে দিলাম
+  return ncc * (0.25 + 0.75 * colorSim);
+}
+// পুরো ছবিতে ক্যামেরা আর ডিজাইনের রঙের গড় পার্থক্য (ক্যামেরার রঙের টান)
+let cast = [0, 0];
+function measureCast() {
+  let mr = 0, mg = 0, mb = 0, cr = 0, cg = 0, cb = 0;
+  for (let i = 0; i < mockData.length; i += 4 * 37) {
+    if (mockData[i + 3] < 128) continue;   // ডিজাইনের বাইরের অংশ বাদ
+    mr += mockData[i]; mg += mockData[i + 1]; mb += mockData[i + 2];
+    cr += camRGB[i]; cg += camRGB[i + 1]; cb += camRGB[i + 2];
+  }
+  const ms = mr + mg + mb || 1, cs = cr + cg + cb || 1;
+  const c = [mr / ms - cr / cs, mg / ms - cg / cs];
+  cast = [cast[0] * 0.8 + c[0] * 0.2, cast[1] * 0.8 + c[1] * 0.2];  // ধীরে ধীরে বদলাক
+}
+
+function checkTick() {
+  if (mode !== 'check' || !current || !design.naturalWidth || document.hidden) return;
+  ensureCanvases(); renderMock();
+  if (!grabCam()) { drawOverlay(); return; }
+  measureCast();
+  const th = sens / 100;
+  boxes().forEach((b, i) => {
+    const s = scoreBox(b);
+    if (s === null) { scores[i] = null; good[i] = false; return; }
+    scores[i] = scores[i] == null ? s : scores[i] * 0.6 + s * 0.4;   // হঠাৎ লাফ কমাতে গড়
+    const was = good[i];
+    good[i] = was ? scores[i] > th - 0.06 : scores[i] >= th;       // নীল↔লাল বারবার না বদলাতে
+    if (good[i] && !was) buzz(40);                  // ঠিক বসলে ফোন হালকা কাঁপবে
+  });
+  updateStatus(); drawOverlay();
+}
+setInterval(checkTick, 220);
+
+let allDone = false;
+function updateStatus() {
+  const n = boxes().length, ok = good.filter(Boolean).length, el = $('status');
+  if (!n) { el.textContent = 'আগে ② চিহ্ন দিয়ে পোস্টারের জায়গা দাগাও'; el.classList.remove('all'); return; }
+  const done = ok === n;
+  el.textContent = done ? '🎉 সব পোস্টার ঠিক জায়গায়!' : `✅ ${bn(ok)}/${bn(n)} ঠিক জায়গায়`;
+  el.classList.toggle('all', done);
+  if (done && !allDone) buzz([80, 60, 80]);
+  allDone = done;
+}
+
+// ---- বক্সগুলো আঁকা ----
+function polyPath(P) { octx.beginPath(); P.forEach(([x, y], i) => (i ? octx.lineTo(x, y) : octx.moveTo(x, y))); octx.closePath(); }
+function drawOverlay() {
+  const dpr = devicePixelRatio || 1;
+  if (ov.width !== Math.round(W() * dpr) || ov.height !== Math.round(H() * dpr)) {
+    ov.width = Math.round(W() * dpr); ov.height = Math.round(H() * dpr);
+  }
+  octx.setTransform(dpr, 0, 0, dpr, 0, 0);
+  octx.clearRect(0, 0, W(), H());
+  if (!current || !design.naturalWidth) return;
+  const t = T(), nw = design.naturalWidth, nh = design.naturalHeight;
+  boxes().forEach((b, i) => {
+    const P = [toScreen(b.x, b.y, t), toScreen(b.x + b.w, b.y, t), toScreen(b.x + b.w, b.y + b.h, t), toScreen(b.x, b.y + b.h, t)];
+    let color = 'rgba(255,255,255,.85)', fill = null, label = bn(i + 1);
+    if (mode === 'check') {
+      const s = scores[i];
+      color = s == null ? '#999' : good[i] ? '#2f8cff' : '#ff3b30';
+      // লাল বক্সে কোন পোস্টার বসবে সেটা আবছা করে দেখাও
+      if (ghost && !good[i]) {
+        octx.save(); polyPath(P); octx.clip(); octx.globalAlpha = 0.5;
+        octx.translate(W() / 2 + t.x, H() / 2 + t.y); octx.rotate(t.r * Math.PI / 180); octx.scale(t.s, t.s);
+        octx.drawImage(design, -nw / 2, -nh / 2); octx.restore();
+      }
+      fill = good[i] ? 'rgba(47,140,255,.28)' : 'rgba(255,59,48,.10)';
+      label += s == null ? '' : good[i] ? ' ✓' : ' ' + bn(Math.round(s * 100)) + '%';
+    } else if (mode === 'mark') color = '#ffb020';
+    if (fill) { polyPath(P); octx.fillStyle = fill; octx.fill(); }
+    polyPath(P); octx.lineWidth = mode === 'check' ? 4 : 2.5; octx.strokeStyle = color;
+    octx.setLineDash(mode === 'align' ? [8, 6] : []); octx.stroke(); octx.setLineDash([]);
+    // নাম্বারের লেবেল
+    octx.font = 'bold 15px system-ui, sans-serif';
+    const tw = octx.measureText(label).width + 12, [lx, ly] = P[0];
+    octx.fillStyle = color; octx.fillRect(lx, ly, tw, 22);
+    octx.fillStyle = mode === 'mark' ? '#000' : '#fff'; octx.fillText(label, lx + 6, ly + 16);
+  });
+  if (draw) {
+    octx.setLineDash([6, 4]); octx.strokeStyle = '#ffb020'; octx.lineWidth = 2;
+    octx.strokeRect(draw.x0, draw.y0, draw.x1 - draw.x0, draw.y1 - draw.y0); octx.setLineDash([]);
+  }
+}
+addEventListener('resize', () => { if (mode === 'mark') fitMark(); else render(); mockKey = ''; });
+
+// ================= ৫. মোড বদলানো আর বাটন =================
+const HINTS = {
+  align: 'দেওয়ালের সাথে ছবিটা মিলাও: ১ আঙুলে সরাও, ২ আঙুলে বড়-ছোট/ঘোরাও। তারপর 🔒 লক করো। (ফোন স্ট্যান্ডে বসিয়ে নিলে আর নড়বে না)',
+  mark: 'প্রতিটা পোস্টারের উপর ট্যাপ করো, বা ✨ চাপো। না ধরলে আঙুল টেনে বক্স আঁকো। বক্সে ট্যাপ = মুছে যাবে।',
+  check: 'পোস্টার লাগাও — ঠিক জায়গায় বসলে 🟦 নীল, না হলে 🟥 লাল। ভুল বললে "কড়াকড়ি" কমাও/বাড়াও।'
+};
+function setMode(m) {
+  mode = m; store('mode', m);
+  document.body.dataset.mode = m;
+  document.querySelectorAll('[data-tab]').forEach((b) => b.classList.toggle('on', b.dataset.tab === m));
+  $('hint').textContent = HINTS[m];
+  scores = []; good = []; allDone = false; draw = null; pointers.clear();
+  if (m === 'mark' && design.naturalWidth) requestAnimationFrame(fitMark); else render();
+  if (m === 'check') updateStatus();
+}
+document.querySelectorAll('[data-tab]').forEach((b) => (b.onclick = () => setMode(b.dataset.tab)));
+
+$('opacity').oninput = (e) => { design.style.opacity = e.target.value / 100; store('opacity', e.target.value); };
+function setLock(v) {
+  locked = v; store('locked', v);
   $('lockBtn').textContent = locked ? '🔒 লক' : '🔓 সরানো যাবে';
   $('lockBtn').classList.toggle('on', locked);
-  document.body.classList.toggle('locked', locked);
-};
-$('diffBtn').onclick = () => {
-  const on = design.classList.toggle('diff');
-  $('diffBtn').classList.toggle('on', on);
-};
-$('resetBtn').onclick = () => current && fitView();
+}
+$('lockBtn').onclick = () => setLock(!locked);
+$('diffBtn').onclick = () => $('diffBtn').classList.toggle('on', design.classList.toggle('diff'));
+$('resetBtn').onclick = () => current && !locked && fitView();
 $('hideBtn').onclick = () => document.body.classList.add('hide-ui');
 $('showUi').onclick = () => document.body.classList.remove('hide-ui');
+$('ghostBtn').onclick = () => { ghost = !ghost; store('ghost', ghost); $('ghostBtn').classList.toggle('on', ghost); drawOverlay(); };
+$('sens').oninput = (e) => { sens = Number(e.target.value); store('sens', sens); };
+$('fsBtn').onclick = () => {
+  if (document.fullscreenElement) document.exitFullscreen?.();
+  else document.documentElement.requestFullscreen?.({ navigationUI: 'hide' }).catch(() => {});
+};
 
-// ---------- ৪. ডিজাইন যোগ করা ও মনে রাখা (IndexedDB) ----------
-// ফোনে ছবিগুলো সেভ থাকবে, পরের বার খুললে আবার দিতে হবে না
+// ================= ৬. ডিজাইন যোগ করা ও মনে রাখা (IndexedDB) =================
 let db = null;
 function openDB() {
   return new Promise((res) => {
@@ -286,74 +758,75 @@ function dbAll() {
 }
 function dbPut(item) { try { db?.transaction('designs', 'readwrite').objectStore('designs').put(item); } catch {} }
 function dbDel(id)   { try { db?.transaction('designs', 'readwrite').objectStore('designs').delete(id); } catch {} }
-
-// ছোট সেটিংস localStorage-এ (না চললেও সমস্যা নেই)
-function store(k, v) { try { localStorage.setItem('po-' + k, JSON.stringify(v)); } catch {} }
-function load(k, d) { try { const v = localStorage.getItem('po-' + k); return v ? JSON.parse(v) : d; } catch { return d; } }
 function saveViews() {
-  const all = {}; designs.forEach(d => all[d.id] = d.view);
-  store('views', all);
-  store('current', current?.id);
+  const all = {}; designs.forEach((d) => (all[d.id] = d.view));
+  store('views', all); store('current', current?.id);
 }
 
 $('file').onchange = async (e) => {
   for (const f of e.target.files) {
     const item = { id: Date.now() + '-' + Math.random().toString(36).slice(2, 7), blob: f };
-    dbPut(item);
-    addDesign(item);
+    dbPut(item); addDesign(item);
   }
   e.target.value = '';
-  select(designs[designs.length - 1]);
+  if (designs.length) select(designs[designs.length - 1]);
 };
-
 function addDesign(item, savedView) {
   const d = { id: item.id, url: URL.createObjectURL(item.blob), view: savedView || null };
-  designs.push(d);
-  renderThumbs();
-  return d;
+  designs.push(d); renderThumbs(); return d;
 }
-
 function renderThumbs() {
   const box = $('thumbs'); box.innerHTML = '';
   designs.forEach((d) => {
     const im = document.createElement('img');
-    im.src = d.url;
-    if (d === current) im.className = 'active';
+    im.src = d.url; if (d === current) im.className = 'active';
     im.onclick = () => select(d);
     box.appendChild(im);
   });
 }
-
 function select(d) {
-  current = d;
-  msg.hidden = true;
-  design.onload = () => { if (d.view) { view = { ...d.view }; applyView(); } else fitView(); };
+  current = d; msg.hidden = true; history = []; scores = []; good = []; mockKey = '';
+  design.onload = () => {
+    prepMock();
+    if (d.view) { view = { ...d.view }; render(); } else fitView();
+    if (mode === 'mark') fitMark();
+  };
   design.src = d.url;
-  renderThumbs();
-  saveViews();
+  renderThumbs(); saveViews();
 }
-
 $('delBtn').onclick = () => {
-  if (!current || !confirm('এই ডিজাইনটা মুছে ফেলবে?')) return;
-  dbDel(current.id);
+  if (!current || !confirm('এই ডিজাইনটা (আর এর বক্সগুলো) মুছে ফেলবে?')) return;
+  dbDel(current.id); delete boxesAll[current.id]; store('boxes', boxesAll);
   URL.revokeObjectURL(current.url);
-  designs = designs.filter(d => d !== current);
-  current = null; design.removeAttribute('src');
+  designs = designs.filter((d) => d !== current);
+  current = null; design.removeAttribute('src'); md = null;
   if (designs.length) select(designs[0]);
-  else { renderThumbs(); msg.hidden = false; }
+  else { renderThumbs(); msg.hidden = false; drawOverlay(); }
   saveViews();
 };
 
-// ---------- শুরু ----------
+// ================= ৭. অ্যাপ হিসেবে ইনস্টল (PWA) =================
+let installEvt = null;
+addEventListener('beforeinstallprompt', (e) => { e.preventDefault(); installEvt = e; $('installBtn').hidden = false; });
+$('installBtn').onclick = async () => {
+  if (!installEvt) return;
+  installEvt.prompt(); await installEvt.userChoice.catch(() => {});
+  installEvt = null; $('installBtn').hidden = true;
+};
+if ('serviceWorker' in navigator) navigator.serviceWorker.register('sw.js').catch(() => {});
+
+// ================= শুরু =================
 (async function init() {
   const op = load('opacity', 50);
   $('opacity').value = op; design.style.opacity = op / 100;
+  $('sens').value = sens; $('ghostBtn').classList.toggle('on', ghost);
+  setLock(locked);
+  setMode(load('mode', 'align'));
 
   db = await openDB();
   const views = load('views', {});
-  const items = await dbAll();
-  items.forEach(it => addDesign(it, views[it.id]));
-  const last = designs.find(d => d.id === load('current', null)) || designs[0];
+  (await dbAll()).forEach((it) => addDesign(it, views[it.id]));
+  const last = designs.find((d) => d.id === load('current', null)) || designs[0];
   if (last) select(last);
 
   startCamera();
