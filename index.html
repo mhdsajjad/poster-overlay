@@ -190,8 +190,8 @@ function applyView() {
 // শুরুতে ছবিটা স্ক্রিনের চওড়ায় বসাও
 function fitView() {
   const w = design.naturalWidth || 1, h = design.naturalHeight || 1;
-  // ক্যামেরা ভিডিও "cover" এ দেখায়, তাই ছবিও স্ক্রিন ঢেকে দেয় এমনভাবে বসাই
-  const s = Math.max(innerWidth / w, innerHeight / h);
+  // শুরুতে পুরো ছবিটা যেন স্ক্রিনে দেখা যায় (কিছু কাটা না পড়ে), পরে আঙুলে বড় করা যাবে
+  const s = Math.min(innerWidth / w, innerHeight / h);
   view = { x: 0, y: 0, s, r: 0 };
   applyView();
 }
